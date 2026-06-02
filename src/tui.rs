@@ -164,7 +164,7 @@ pub async fn run_tui() -> Result<(), Box<dyn Error>> {
             Ok(c) => (c, false),
             Err(e) => {
                 // Print before entering TUI so the user sees it.
-                eprintln!("Warning: failed to load config.json ({})", e);
+                eprintln!("Warning: failed to load config.toml ({})", e);
                 (
                     Config {
                         username: String::new(),
@@ -186,7 +186,7 @@ pub async fn run_tui() -> Result<(), Box<dyn Error>> {
             last_session_token: String::new(),
             use_tui: false,
         };
-        let content = serde_json::to_string_pretty(&default_config)?;
+        let content = toml::to_string_pretty(&default_config)?;
         fs::write(&config_path, content)?;
         (default_config, true)
     };
@@ -249,7 +249,7 @@ pub async fn run_tui() -> Result<(), Box<dyn Error>> {
     }
 
     if config_missing {
-        app.log_error("config.json not found — a template was created. Press c to configure now.");
+        app.log_error("config.toml not found — a template was created. Press c to configure now.");
     } else if app.config.username == "your-username-here" {
         app.log_info("Default config detected. Press c to enter your credentials.");
     }

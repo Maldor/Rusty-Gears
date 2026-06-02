@@ -7,7 +7,7 @@ use semver::Version;
 
 use crate::manifest::DOWNLOAD_DIRECTORY;
 use crate::models::{
-    ApiFileResponse, FileToDownload, LocalVersionInfo, Release, VersionManifest,
+    ApiFileResponse, FileToDownload, LocalVersionInfo, NewModsFile, Release, VersionManifest,
 };
 
 /// The base URL for the Factorio mods API.
@@ -15,7 +15,7 @@ pub const FILES_URL: &str = "https://mods.factorio.com/api/mods";
 /// The base URL for constructing download links.
 pub const BASE_API_URL: &str = "https://mods.factorio.com";
 /// The name of the file for adding new mods.
-pub const NEW_MODS_FILE: &str = "New_mods.json";
+pub const NEW_MODS_FILE: &str = "New_mods.toml";
 
 /// Parses a Factorio-style dependency string to get the mod name.
 /// e.g., "? base >= 1.1" -> "base"
@@ -103,7 +103,8 @@ pub async fn process_new_mods_file(
     if file_content.trim().is_empty() {
         return Ok(Some(vec![]));
     }
-    let new_mods: Vec<String> = serde_json::from_str(&file_content)?;
+    let new_mods_file: NewModsFile = toml::from_str(&file_content)?;
+    let new_mods = new_mods_file.mods;
 
     let mut failed_mods = Vec::new();
 

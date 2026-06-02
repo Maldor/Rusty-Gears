@@ -24,7 +24,7 @@ use crate::download::download_file;
 use crate::manifest::{
     load_local_manifest, save_local_manifest, DOWNLOAD_DIRECTORY, VERSION_MANIFEST_FILE,
 };
-use crate::models::{Config, LocalVersionInfo};
+use crate::models::{Config, LocalVersionInfo, NewModsFile};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
@@ -66,7 +66,7 @@ async fn run_automated() -> Result<(), Box<dyn Error>> {
             last_session_token: String::new(),
             use_tui: false,
         };
-        let file_content = serde_json::to_string_pretty(&default_config)?;
+        let file_content = toml::to_string_pretty(&default_config)?;
         fs::write(&config_path, file_content)?;
         println!("\nA template config has been created. Launching TUI so you can configure it.");
         return tui::run_tui().await;
@@ -133,15 +133,17 @@ async fn run_automated() -> Result<(), Box<dyn Error>> {
     println!("\nUpdate process complete.");
     save_local_manifest(&manifest_path, &local_manifest)?;
 
-    // Overwrite New_mods.json with any mods that failed validation.
+    // Overwrite New_mods.toml with any mods that failed validation.
     if let Some(failed_mods) = failed_new_mods {
         println!(
             "Updating '{}' with any remaining invalid mods...",
             NEW_MODS_FILE
         );
-        let new_content = serde_json::to_string_pretty(&failed_mods)?;
+        let is_empty = failed_mods.is_empty();
+        let new_mods_file = NewModsFile { mods: failed_mods };
+        let new_content = toml::to_string_pretty(&new_mods_file)?;
         fs::write(NEW_MODS_FILE, new_content)?;
-        if failed_mods.is_empty() {
+        if is_empty {
             println!(
                 "'{}' has been cleared as all mods were processed successfully.",
                 NEW_MODS_FILE

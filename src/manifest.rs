@@ -10,7 +10,7 @@ use crate::models::{LocalVersionInfo, VersionManifest};
 /// The directory where files will be downloaded and checked.
 pub const DOWNLOAD_DIRECTORY: &str = "./";
 /// The name of the file to store local file versions.
-pub const VERSION_MANIFEST_FILE: &str = "versions.json";
+pub const VERSION_MANIFEST_FILE: &str = "versions.toml";
 
 /// Loads the local version manifest. If not found, it creates one by parsing filenames.
 pub fn load_local_manifest(
@@ -23,7 +23,7 @@ pub fn load_local_manifest(
             manifest_path.display()
         );
         let file_content = fs::read_to_string(manifest_path)?;
-        return Ok(serde_json::from_str(&file_content)?);
+        return Ok(toml::from_str(&file_content)?);
     }
 
     println!(
@@ -90,7 +90,7 @@ pub fn save_local_manifest(
     path: &Path,
     manifest: &VersionManifest,
 ) -> Result<(), Box<dyn Error>> {
-    let file_content = serde_json::to_string_pretty(manifest)?;
+    let file_content = toml::to_string_pretty(manifest)?;
     fs::write(path, file_content)?;
     println!("Version manifest saved to {}.", path.display());
     Ok(())

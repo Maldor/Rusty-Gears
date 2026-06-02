@@ -1,20 +1,21 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-/// Represents the structure of the config.json file.
+/// Represents the structure of the config.toml file.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Config {
-    #[serde(rename = "Username")]
     pub username: String,
-    #[serde(rename = "Password")]
     pub password: String,
-    #[serde(rename = "Last Login")]
     pub last_login: String,
-    #[serde(rename = "Last Session token")]
     pub last_session_token: String,
     #[serde(default)]
-    #[serde(rename = "Use TUI")]
     pub use_tui: bool,
+}
+
+/// Wrapper for the New_mods.toml file (a list of mod names).
+#[derive(Serialize, Deserialize, Debug)]
+pub struct NewModsFile {
+    pub mods: Vec<String>,
 }
 
 /// Represents the structure of the JSON response from the authentication API.
