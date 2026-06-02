@@ -1,3 +1,5 @@
 /target
 /downloads
 config.json
+versions.toml
+config.toml
