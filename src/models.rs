@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 /// Represents the structure of the config.json file.
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Config {
     #[serde(rename = "Username")]
     pub username: String,
@@ -12,6 +12,9 @@ pub struct Config {
     pub last_login: String,
     #[serde(rename = "Last Session token")]
     pub last_session_token: String,
+    #[serde(default)]
+    #[serde(rename = "Use TUI")]
+    pub use_tui: bool,
 }
 
 /// Represents the structure of the JSON response from the authentication API.

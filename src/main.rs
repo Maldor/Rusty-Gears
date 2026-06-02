@@ -1,6 +1,7 @@
 // main.rs
-// Updated: entry point that orchestrates the workflow.
-// Individual components now live in their own modules.
+// Entry point that checks config for `Use_TUI` to decide between the
+// interactive TUI and the original automated/scripted workflow.
+// The `-s` flag forces automated mode regardless of config.
 
 mod models;
 mod config;
@@ -8,6 +9,7 @@ mod auth;
 mod manifest;
 mod api;
 mod download;
+mod tui;
 
 use std::error::Error;
 use std::fs;
@@ -26,6 +28,30 @@ use crate::models::{Config, LocalVersionInfo};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
+    let args: Vec<String> = std::env::args().collect();
+    let scripted = args.iter().any(|a| a == "-s");
+
+    // The -s flag always forces automated mode.
+    if scripted {
+        return run_automated().await;
+    }
+
+    // Check config for Use_TUI flag.
+    let config_path = PathBuf::from(CONFIG_FILE);
+    if config_path.exists() {
+        if let Ok(config) = load_config(&config_path) {
+            if config.use_tui {
+                return tui::run_tui().await;
+            }
+        }
+    }
+
+    // Default to automated.
+    run_automated().await
+}
+
+/// The original automated workflow — unchanged from before.
+async fn run_automated() -> Result<(), Box<dyn Error>> {
     let config_path = PathBuf::from(CONFIG_FILE);
 
     if !config_path.exists() {
@@ -38,11 +64,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
             password: "your-password-here".to_string(),
             last_login: String::new(),
             last_session_token: String::new(),
+            use_tui: false,
         };
         let file_content = serde_json::to_string_pretty(&default_config)?;
         fs::write(&config_path, file_content)?;
-        println!("\nA new configuration file has been created. Please fill it out and run the program again.");
-        return Ok(());
+        println!("\nA template config has been created. Launching TUI so you can configure it.");
+        return tui::run_tui().await;
     }
 
     println!(
