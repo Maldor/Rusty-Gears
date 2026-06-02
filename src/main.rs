@@ -65,6 +65,7 @@ async fn run_automated() -> Result<(), Box<dyn Error>> {
             last_login: String::new(),
             last_session_token: String::new(),
             use_tui: false,
+            token_source: String::new(),
         };
         let file_content = toml::to_string_pretty(&default_config)?;
         fs::write(&config_path, file_content)?;
@@ -78,11 +79,16 @@ async fn run_automated() -> Result<(), Box<dyn Error>> {
     );
     let mut config = load_config(&config_path)?;
     let client = reqwest::Client::new();
-    let token = get_valid_token(&client, &config).await?;
+    let (token, did_internal_auth) = get_valid_token(&client, &config).await?;
 
     if token != config.last_session_token {
         config.last_session_token = token.clone();
         config.last_login = Utc::now().to_rfc3339();
+        // Discard the password when internal auth was used — we rely on the
+        // token (which Factorio keeps fresh via player-data.json on restart).
+        if did_internal_auth {
+            config.password.clear();
+        }
         save_config(&config_path, &config)?;
     }
 
@@ -111,6 +117,12 @@ async fn run_automated() -> Result<(), Box<dyn Error>> {
             )
             .await
             {
+                if config.token_source == "player-data.json" {
+                    eprintln!(
+                        "Warning: Factorio's token isn't fresh, please enter a user name \
+                         and password for our temporary use"
+                    );
+                }
                 eprintln!("ERROR downloading {}: {}", file.full_new_name, e);
             } else {
                 // Update the manifest with the new version info.

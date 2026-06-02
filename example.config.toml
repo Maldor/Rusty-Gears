@@ -1,7 +1,7 @@
 # Your Factorio username goes here
 username = ""
-# Your Factorio password goes here
 password = ""
 last_login = ""
 last_session_token = ""
 use_tui = false
+token_source = ""

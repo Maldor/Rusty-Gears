@@ -32,7 +32,7 @@ use crate::download::download_file;
 use crate::manifest::{
     load_local_manifest, save_local_manifest, DOWNLOAD_DIRECTORY, VERSION_MANIFEST_FILE,
 };
-use crate::models::{Config, FileToDownload, LocalVersionInfo, VersionManifest};
+use crate::models::{ApiFileResponse, Config, FileToDownload, LocalVersionInfo, Release, VersionManifest};
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -72,6 +72,12 @@ enum LogLevel {
     Error,
 }
 
+/// Information about the latest release of a mod, extracted from the API.
+struct ModReleaseInfo {
+    latest_version: String,
+    download_url: String,
+}
+
 /// Messages flowing from async tasks (or the keyboard thread) to the event loop.
 enum AppEvent {
     Key(KeyEvent),
@@ -89,10 +95,10 @@ enum AppEvent {
     },
     ModValidated {
         mod_name: String,
-        result: Result<(), String>,
+        result: Result<ModReleaseInfo, String>,
     },
     AuthDone {
-        result: Result<String, String>,
+        result: Result<(String, bool), String>,
     },
 }
 
@@ -172,6 +178,7 @@ pub async fn run_tui() -> Result<(), Box<dyn Error>> {
                         last_login: String::new(),
                         last_session_token: String::new(),
                         use_tui: false,
+                        token_source: String::new(),
                     },
                     true,
                 )
@@ -185,6 +192,7 @@ pub async fn run_tui() -> Result<(), Box<dyn Error>> {
             last_login: String::new(),
             last_session_token: String::new(),
             use_tui: false,
+            token_source: String::new(),
         };
         let content = toml::to_string_pretty(&default_config)?;
         fs::write(&config_path, content)?;
@@ -354,13 +362,29 @@ impl TuiApp {
             KeyCode::F(5) => self.refresh_manifest(),
 
             // c – Edit config inline.
-            KeyCode::Char('c') | KeyCode::Char('C') => {
+            KeyCode::Char('c') => {
                 self.config_edit_username = self.config.username.clone();
                 self.config_edit_password = self.config.password.clone();
                 self.config_edit_focus = ConfigField::Username;
                 self.input_mode = InputMode::EditingConfig;
                 self.log_info("Edit config — Tab to switch fields, Enter to save, Esc to cancel.");
             }
+
+            // C – Check for updates (alternate to F1).
+            KeyCode::Char('C') => self.spawn_check_updates(),
+
+            // M – Add new mod (alternate to F2).
+            KeyCode::Char('m') | KeyCode::Char('M') => {
+                self.input_mode = InputMode::AddingMod;
+                self.mod_input_buffer.clear();
+                self.log_info("Type the mod name and press Enter to validate. Esc to cancel.");
+            }
+
+            // A – Authenticate (alternate to F3).
+            KeyCode::Char('a') | KeyCode::Char('A') => self.spawn_auth(),
+
+            // D – Download all (alternate to F4).
+            KeyCode::Char('d') | KeyCode::Char('D') => self.spawn_download_all(),
 
             // r – Reload config from disk.
             KeyCode::Char('r') | KeyCode::Char('R') => self.reload_config(),
@@ -488,7 +512,6 @@ impl TuiApp {
         });
     }
 
-    /// F2 sub-step: validate a user-typed mod name against the Factorio API.
     fn spawn_validate_mod(&mut self, mod_name: String) {
         let client = self.client.clone();
         let tx = self.event_tx.clone();
@@ -502,12 +525,54 @@ impl TuiApp {
             );
             match client.get(&url).send().await {
                 Ok(resp) if resp.status().is_success() => {
-                    let _ = tx
-                        .send(AppEvent::ModValidated {
-                            mod_name,
-                            result: Ok(()),
-                        })
-                        .await;
+                    // Try to deserialize the full response to get the latest release.
+                    let release_info = async {
+                        let api_response: Result<ApiFileResponse, _> =
+                            resp.json().await;
+                        match api_response {
+                            Ok(response) => {
+                                // Use semver to find the latest release.
+                                let mut latest_ver: Option<semver::Version> = None;
+                                let mut latest_rel: Option<&Release> = None;
+                                for release in &response.releases {
+                                    if let Ok(v) = semver::Version::parse(&release.version) {
+                                        if latest_ver.as_ref().map_or(true, |lv| &v > lv) {
+                                            latest_ver = Some(v);
+                                            latest_rel = Some(release);
+                                        }
+                                    }
+                                }
+                                latest_rel.map(|r| ModReleaseInfo {
+                                    latest_version: r.version.clone(),
+                                    download_url: r.download_url.clone(),
+                                })
+                            }
+                            Err(_) => None,
+                        }
+                    }
+                    .await;
+
+                    match release_info {
+                        Some(info) => {
+                            let _ = tx
+                                .send(AppEvent::ModValidated {
+                                    mod_name,
+                                    result: Ok(info),
+                                })
+                                .await;
+                        }
+                        None => {
+                            let _ = tx
+                                .send(AppEvent::ModValidated {
+                                    mod_name,
+                                    result: Err(
+                                        "Could not determine latest release from API"
+                                            .to_string(),
+                                    ),
+                                })
+                                .await;
+                        }
+                    }
                 }
                 Ok(resp) => {
                     let status = resp.status();
@@ -515,7 +580,7 @@ impl TuiApp {
                     let _ = tx
                         .send(AppEvent::ModValidated {
                             mod_name,
-                            result: Err(format!("API returned {}: {}", status, body)),
+                            result: Err(format!("HTTP {} — {}", status, body)),
                         })
                         .await;
                 }
@@ -523,7 +588,7 @@ impl TuiApp {
                     let _ = tx
                         .send(AppEvent::ModValidated {
                             mod_name,
-                            result: Err(e.to_string()),
+                            result: Err(format!("Request failed: {}", e)),
                         })
                         .await;
                 }
@@ -539,7 +604,9 @@ impl TuiApp {
         let tx = self.event_tx.clone();
 
         tokio::spawn(async move {
-            let result = get_valid_token(&client, &config).await.map_err(|e| e.to_string());
+            let result = get_valid_token(&client, &config)
+                .await
+                .map_err(|e| e.to_string());
             let _ = tx.send(AppEvent::AuthDone { result }).await;
         });
     }
@@ -717,15 +784,28 @@ impl TuiApp {
             }
             AppEvent::ModValidated { mod_name, result } => {
                 match result {
-                    Ok(()) => {
-                        let placeholder = LocalVersionInfo {
-                            version: "0.0.0".to_string(),
-                            extension: "zip".to_string(),
+                    Ok(info) => {
+                        let full_new_name = format!(
+                            "{}_{}.zip",
+                            mod_name, info.latest_version
+                        );
+                        let download_url = format!(
+                            "https://mods.factorio.com{}",
+                            info.download_url
+                        );
+                        let file = FileToDownload {
+                            base_name: mod_name.clone(),
+                            new_version: info.latest_version,
+                            full_new_name,
+                            download_url,
                         };
-                        self.manifest.insert(mod_name.clone(), placeholder);
-                        self.log_success(format!("Mod '{}' added to manifest.", mod_name));
-                        if !self.manifest.is_empty() {
-                            self.mod_list_state.select(Some(0));
+                        self.download_queue.push(file);
+                        self.log_success(format!(
+                            "Mod '{}' added to download queue.",
+                            mod_name
+                        ));
+                        if !self.download_queue.is_empty() {
+                            self.queue_list_state.select(Some(0));
                         }
                     }
                     Err(e) => {
@@ -735,14 +815,26 @@ impl TuiApp {
             }
             AppEvent::AuthDone { result } => {
                 match result {
-                    Ok(token) => {
+                    Ok((token, did_internal_auth)) => {
+                        let token_changed = token != self.config.last_session_token;
                         self.token = Some(token.clone());
                         self.config.last_session_token = token;
                         self.config.last_login = Utc::now().to_rfc3339();
-                        if let Err(e) = save_config(&self.config_path, &self.config) {
-                            self.log_error(format!("Failed to save token to config: {}", e));
+                        if did_internal_auth {
+                            self.config.password.clear();
+                        }
+                        if token_changed {
+                            if let Err(e) = save_config(&self.config_path, &self.config) {
+                                self.log_error(
+                                    format!("Failed to save token to config: {}", e),
+                                );
+                            } else {
+                                self.log_success(
+                                    "Authentication successful — token saved.",
+                                );
+                            }
                         } else {
-                            self.log_success("Authentication successful — token saved.");
+                            self.log_info("Token is already current — no config update needed.");
                         }
                     }
                     Err(e) => {
@@ -797,10 +889,38 @@ fn draw_ui(f: &mut Frame, app: &mut TuiApp) {
 
     // Bottom bar with keybindings.
     let bar_style = Style::default().fg(Color::Black).bg(Color::Cyan);
-    let bar_text = Line::from(Span::styled(
-        " F1 Check  |  F2 Add Mod  |  F3 Auth  |  F4 Download All  |  c Config  |  r Reload  |  Tab Focus  |  q Quit ",
-        bar_style,
-    ));
+    let hotkey_style = bar_style.add_modifier(Modifier::BOLD | Modifier::UNDERLINED);
+    let sep = Span::styled("  |  ", bar_style);
+
+    let bar_text = Line::from(vec![
+        Span::styled(" F1/", bar_style),
+        Span::styled("C", hotkey_style),
+        Span::styled("heck", bar_style),
+        sep.clone(),
+        Span::styled("F2/ Add ", bar_style),
+        Span::styled("M", hotkey_style),
+        Span::styled("od", bar_style),
+        sep.clone(),
+        Span::styled("F3/", bar_style),
+        Span::styled("A", hotkey_style),
+        Span::styled("uth", bar_style),
+        sep.clone(),
+        Span::styled("F4/", bar_style),
+        Span::styled("D", hotkey_style),
+        Span::styled("ownload All", bar_style),
+        sep.clone(),
+        Span::styled("c", hotkey_style),
+        Span::styled(" Config", bar_style),
+        sep.clone(),
+        Span::styled("r", hotkey_style),
+        Span::styled(" Reload", bar_style),
+        sep.clone(),
+        Span::styled("Tab", hotkey_style),
+        Span::styled(" Focus", bar_style),
+        sep.clone(),
+        Span::styled("q", hotkey_style),
+        Span::styled(" Quit ", bar_style),
+    ]);
     let bar = Paragraph::new(bar_text);
     f.render_widget(bar, outer[2]);
 

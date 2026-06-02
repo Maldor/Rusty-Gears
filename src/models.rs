@@ -10,6 +10,20 @@ pub struct Config {
     pub last_session_token: String,
     #[serde(default)]
     pub use_tui: bool,
+    /// Where the session token comes from:
+    ///   ""                — existing behaviour (config + internal auth)
+    ///   "player-data.json" — read from Factorio's player-data.json
+    ///   "internal"         — config-based username/password auth
+    ///   anything else      — treated as ""
+    #[serde(default)]
+    pub token_source: String,
+}
+
+/// Represents the relevant fields in Factorio's player-data.json file.
+#[derive(Deserialize, Debug)]
+pub struct PlayerData {
+    #[serde(rename = "service-token")]
+    pub service_token: String,
 }
 
 /// Wrapper for the New_mods.toml file (a list of mod names).
